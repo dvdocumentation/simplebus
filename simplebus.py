@@ -135,9 +135,10 @@ def router(item,item_id,direct=False):
             users = maindb["users"].all()
             
             for user in users:
-               if "tags" in user:
-                  if tag in user["tags"]:
-                     send_to_user(user,item_id,direct,item)
+               if not user.get("_id") == item.get('sender'):
+                  if "tags" in user:
+                     if tag in user["tags"]:
+                        send_to_user(user,item_id,direct,item)
 
 
    return True
@@ -498,7 +499,7 @@ class SimpleChat(WebSocket):
 
          if UID_REQUIRED:
             if not "uid" in message:
-               self.sendMessage(json.dumps({"type":"error","data":message.get("data")}))
+               self.sendMessage(json.dumps({"type":"ERROR","data":message}))
 
          if message.get("type") == "confirmation":
             uid = message.get("data")+"_"+clients_socket_id[self]
