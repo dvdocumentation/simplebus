@@ -55,6 +55,8 @@ PONG = 0xA
 
 DELIVERY_TIME = 10
 
+NO_AUTHORIZATION = 'NO AUTHORIZATION'
+
 UID_REQUIRED=True
 
 USERS = set()
@@ -165,10 +167,10 @@ def send_to_user(user,item_id,direct,message):
                   clients_id_socket[client_id].sendMessage(json.dumps(message))
                   
                   instant_confirm.append(item_id)
-                  print("Отправили:"+ item_id +" "+str(datetime.datetime.now()))
+                  print("Sent:"+ item_id +" "+str(datetime.datetime.now()))
 
             except:   
-               print("Не доставлено")
+               print("Not delivered")
                return False
            
          else:
@@ -244,7 +246,7 @@ def read_and_send(q,client,client_id):
             to_confirm[item_id+"_"+client_id]=(item,time.time(),item_id,client_id,str(datetime.datetime.now()))
             client.sendMessage(json.dumps(item))
             
-            print("Отправили:"+ item_id +" "+str(datetime.datetime.now()))
+            print("Sent:"+ item_id +" "+str(datetime.datetime.now()))
                   
 
             
@@ -271,7 +273,7 @@ def main_output_worker():
                client.sendMessage(json.dumps(item))
 
             
-               print("Отправили:"+ item_id +" "+str(datetime.datetime.now()))
+               print("Sent:"+ item_id +" "+str(datetime.datetime.now()))
                main_out_queue.task_done()
             except:
                print("Error sending")   
@@ -296,7 +298,7 @@ def garbage_collector():
                      main_out_queue.put({"item_id":message_id,"client_id":client_id} )
                      
 
-                     print("Повторное помещение:"+message_id+" "+str(datetime.datetime.now()))
+                     print("Re-queueing:"+message_id+" "+str(datetime.datetime.now()))
 
                      
                except Exception as e:
@@ -427,7 +429,7 @@ def put_http():
             _id=  str(uuid.uuid4().hex)
             message['_id'] =_id
          
-         print("Приняли:"+ _id +" "+str(datetime.datetime.now()))
+         print("Accepted:"+ _id +" "+str(datetime.datetime.now()))
 
          message['sender'] = request.authorization.username
          
@@ -503,7 +505,7 @@ class SimpleChat(WebSocket):
 
          if message.get("type") == "confirmation":
             uid = message.get("data")+"_"+clients_socket_id[self]
-            print("Подтверждение: "+uid+" "+str(datetime.datetime.now()))
+            print("Confirmation: "+uid+" "+str(datetime.datetime.now()))
             if uid in to_confirm:
                del to_confirm[uid]
             elif message.get("data") in instant_confirm:
@@ -521,11 +523,11 @@ class SimpleChat(WebSocket):
             user = maindb["users"].get(id)
     
             if user==None:
-                  self.close(1002,"no authorization")
+                  self.close(1002,NO_AUTHORIZATION)
             else:
                if not check_password_hash(user['password'], password):
                   print(self.address, 'closed')
-                  self.close(1002,"no authorization")
+                  self.close(1002,NO_AUTHORIZATION)
                else:   
 
                   clients_socket_id[self] = id
@@ -552,7 +554,10 @@ class SimpleChat(WebSocket):
                   pass
 
                else:
-                  self.sendMessage(json.dumps({"type":"error","data":_id}))
+                  error_messsage = {"type":"ERROR","data":_id, "sender": message['sender']}
+                  if "uid" in message:
+                     error_messsage["uid"] = message["uid"]
+                  self.sendMessage(json.dumps(error_messsage,ensure_ascii=False))
             else:
 
                input_stream[_id] = message
@@ -587,6 +592,7 @@ class SimpleChat(WebSocket):
     
 
 web_thr=None
+
 
 if __name__ == "__main__":
 
