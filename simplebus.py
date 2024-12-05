@@ -18,6 +18,7 @@ import pathlib
 import time
 
 import datetime
+import queue
 
 
 
@@ -29,6 +30,7 @@ import uuid
 import os.path
 
 import requests
+from flask import jsonify,make_response
 
 
 from persistqueue import Queue, PDict
@@ -39,7 +41,8 @@ import shelve
 from sqlitedict import SqliteDict
 
 
-from msgspec.json import decode,encode
+
+
 
 logging.basicConfig()
 
@@ -57,13 +60,14 @@ DELIVERY_TIME = 10
 
 NO_AUTHORIZATION = 'NO AUTHORIZATION'
 
-UID_REQUIRED=True
+UID_REQUIRED=False
 
 USERS = set()
 connected = []
 clients = []
 clients_socket_id = {}
 clients_id_socket = {}
+tokens = {}
 
 
 WEB_SOCKET = 0
@@ -72,9 +76,10 @@ HTTP = 1
 URL = "192.168.1.41"
 HTTPPort = 2555
 WSPORT = 8000
+THIS_SERVER = "serv1"
 
 
-input_stream = SqliteDict("input_dict.sqlite",autocommit=True,outer_stack=False,decode=decode,encode=encode)
+input_stream = SqliteDict("input_dict.sqlite",autocommit=True,outer_stack=False)
 
 APP_PATH=str(pathlib.Path(__file__).parent.absolute())
 
@@ -109,6 +114,7 @@ main_out_queue =Queue(APP_PATH+os.sep+"main_out", autosave=True)
 #for user in dbusers:
 #   id = user["_id"]
     
+maindb['users'].insert({"_id":"admin","password": generate_password_hash("111222")},upsert=True)    
 
 to_confirm = shelve.open("pending.d")
 
@@ -487,6 +493,7 @@ def put_http():
     return  Response("", status=200 )
 
 
+
 class SimpleChat(WebSocket):
 
     def handleMessage(self):
@@ -516,28 +523,58 @@ class SimpleChat(WebSocket):
             if "confirm" in message:
                 clients_id_socket[message['confirm']].sendMessage(json.dumps({"type":"confirmation","data":message.get("data")}))  
 
-         elif message.get("type") == "connect":
-            id = message.get("data")
-            password = message.get("password")
+         elif message.get("type") == "connect_token" and "token" in message:
+            if not message.get("token") in tokens:
+               tokens[message.get("token")]={}
+            
+            tokens[message.get("token")][message.get("from")] = self  
+         
+         elif message.get("type") == "onlinews":
+            if message.get("token") in tokens:
+               if "to" in message:
 
-            user = maindb["users"].get(id)
-    
-            if user==None:
-                  self.close(1002,NO_AUTHORIZATION)
+                  if message.get("to") in tokens[message.get("token")]:
+            
+                     try:
+                           tokens[message.get("token")][message.get("to")].sendMessage(json.dumps(message,ensure_ascii=False))
+                     except:   
+                        print("Not delivered")
             else:
-               if not check_password_hash(user['password'], password):
-                  print(self.address, 'closed')
-                  self.close(1002,NO_AUTHORIZATION)
-               else:   
+               if "to" in message: 
+                     
+                     if message.get("to") in clients_id_socket:
+                        clients_id_socket[message.get("to")].sendMessage(json.dumps(message))
 
-                  clients_socket_id[self] = id
-                  clients_id_socket[id] = self
+           
 
-                  index = -1
-                  if self in clients:
-                     index  =  clients.index(self)
-                  
+         elif message.get("type") == "connect":
+            if "token" in message:
+               if  message.get("token") in tokens:
+                  tokens[message.get("token")][message.get("from")] = self  
+               else:
+                  self.close(1002,NO_AUTHORIZATION)   
+            else:   
+               id = message.get("data")
+               password = message.get("password")
 
+               user = maindb["users"].get(id)
+      
+               if user==None:
+                     self.close(1002,NO_AUTHORIZATION)
+               else:
+                  if not check_password_hash(user['password'], password):
+                     print(self.address, 'closed')
+                     self.close(1002,NO_AUTHORIZATION)
+                  else:   
+
+                     clients_socket_id[self] = id
+                     clients_id_socket[id] = self
+
+                     index = -1
+                     if self in clients:
+                        index  =  clients.index(self)
+                     
+         
          
          else: #обычное соообщение
            
@@ -558,6 +595,7 @@ class SimpleChat(WebSocket):
                   if "uid" in message:
                      error_messsage["uid"] = message["uid"]
                   self.sendMessage(json.dumps(error_messsage,ensure_ascii=False))
+                     
             else:
 
                input_stream[_id] = message
@@ -596,30 +634,34 @@ web_thr=None
 
 if __name__ == "__main__":
 
-    tinput = threading.Thread(target=input_worker)
-    tinput.daemon = True
-    tinput.start()
-
-    t = threading.Thread(target=garbage_collector)
-    t.daemon = True
-    t.start()
-
-    t2 = threading.Thread(target=ping_sockets)
-    t2.daemon = True
-    t2.start()
-
-    
-
-    toutput = threading.Thread(target=main_output_worker)
-    toutput.daemon = True
-    toutput.start()  
-
-    thttp = threading.Thread(target=http_worker)
-    thttp.daemon = True
-    thttp.start()
    
-    #app.run(host='0.0.0.0', port=2555, debug=False, threaded=False)
-    web_thr =  threading.Thread(target=app.run,kwargs=dict(host='0.0.0.0', port=HTTPPort, debug=False,threaded=True,use_reloader=False)).start()    
-    
-    server = SimpleWebSocketServer('0.0.0.0', WSPORT, SimpleChat)
-    server.serveforever()
+
+   tinput = threading.Thread(target=input_worker)
+   tinput.daemon = True
+   tinput.start()
+
+   t = threading.Thread(target=garbage_collector)
+   t.daemon = True
+   t.start()
+
+   #t2 = threading.Thread(target=ping_sockets)
+   #t2.daemon = True
+   #t2.start()
+
+
+   toutput = threading.Thread(target=main_output_worker)
+   toutput.daemon = True
+   toutput.start()  
+
+   thttp = threading.Thread(target=http_worker)
+   thttp.daemon = True
+   thttp.start()
+
+   #app.run(host='0.0.0.0', port=2555, debug=False, threaded=False)
+   web_thr =  threading.Thread(target=app.run,kwargs=dict(host='0.0.0.0', port=HTTPPort, debug=False,threaded=True,use_reloader=False)).start()    
+   
+   server = SimpleWebSocketServer('0.0.0.0', WSPORT, SimpleChat)
+   server.serveforever() 
+
+
+
